@@ -16,10 +16,10 @@
 
   <ItemGroup>
     <Reference Include="CosmosDBInteropSchemaDecoder">
-      <HintPath>..\..\..\CosmosDbDataMovement\CosmosDataMovementService\BinaryReferences\CosmosDBInteropSchemaDecoder.dll</HintPath>
+      <HintPath>..\BinaryReferences\CosmosDBInteropSchemaDecoder.dll</HintPath>
     </Reference>
     <Reference Include="Microsoft.Azure.Documents.Interop.Common">
-      <HintPath>..\..\..\CosmosDbDataMovement\CosmosDataMovementService\BinaryReferences\Microsoft.Azure.Documents.Interop.Common.dll</HintPath>
+      <HintPath>..\BinaryReferences\Microsoft.Azure.Documents.Interop.Common.dll</HintPath>
     </Reference>
   </ItemGroup>
 
