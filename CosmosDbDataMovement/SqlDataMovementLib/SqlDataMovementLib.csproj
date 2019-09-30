@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Azure.CosmosDB.BulkExecutor" Version="2.3.0-preview2" />
+    <PackageReference Include="Microsoft.Azure.DocumentDB.Core" Version="2.7.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="3.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Common\Common.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="CosmosDBInteropSchemaDecoder">
+      <HintPath>..\..\..\CosmosDbDataMovement\CosmosDataMovementService\BinaryReferences\CosmosDBInteropSchemaDecoder.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Azure.Documents.Interop.Common">
+      <HintPath>..\..\..\CosmosDbDataMovement\CosmosDataMovementService\BinaryReferences\Microsoft.Azure.Documents.Interop.Common.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>
