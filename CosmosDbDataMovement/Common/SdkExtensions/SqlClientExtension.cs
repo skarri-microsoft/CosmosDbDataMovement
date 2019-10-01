@@ -1,8 +1,8 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Azure.Documents;
-using Microsoft.Azure.Documents.ChangeFeedProcessor;
 using Microsoft.Azure.Documents.Client;
 using Microsoft.Azure.Documents.Linq;
 
@@ -12,29 +12,25 @@ namespace Common.SdkExtensions
     {
         private readonly string endPoint;
         private readonly string masterKey;
-        private readonly string databaseName;
-        private readonly string collectionName;
         private readonly int throughput;
         private readonly string partitionKey;
         private readonly List<string> includePaths;
         private readonly int ttlInDays;
-
-        private DocumentClient documentClient;
 
         public SqlClientExtension(
             CosmosDbConfig config,
             ConsistencyLevel consistencyLevel,
             ConnectionPolicy connectionPolicy)
         {
-            this.endPoint = config.AccountEndPoint;
-            this.masterKey = config.Key;
-            this.databaseName = config.DbName;
-            this.collectionName = config.CollectionName;
-            this.throughput = config.Throughput;
-            this.partitionKey = config.PartitionKey;
-            this.includePaths = config.IncludePaths;
-            this.ttlInDays = config.TtlInDays;
-            this.initClient(consistencyLevel, connectionPolicy);
+            endPoint = config.AccountEndPoint;
+            masterKey = config.Key;
+            DatabaseName = config.DbName;
+            CollectionName = config.CollectionName;
+            throughput = config.Throughput;
+            partitionKey = config.PartitionKey;
+            includePaths = config.IncludePaths;
+            ttlInDays = config.TtlInDays;
+            InitClient(consistencyLevel, connectionPolicy);
         }
 
         public SqlClientExtension(
@@ -48,70 +44,49 @@ namespace Common.SdkExtensions
         {
             this.endPoint = endPoint;
             this.masterKey = masterKey;
-            this.databaseName = databaseName;
-            this.collectionName = collectionName;
+            this.DatabaseName = databaseName;
+            this.CollectionName = collectionName;
             this.throughput = throughput;
-            this.initClient(consistencyLevel, connectionPolicy);
+            InitClient(consistencyLevel, connectionPolicy);
         }
 
-        public string CollectionName
-        {
-            get { return this.collectionName; }
-        }
+        public string CollectionName { get; }
 
-        public string DatabaseName
-        {
-            get { return this.databaseName; }
-        }
+        public string DatabaseName { get; }
 
-        public DocumentClient DocumentClient
-        {
-            get { return this.documentClient; }
-        }
+        public DocumentClient DocumentClient { get; private set; }
 
-        private void initClient(ConsistencyLevel consistencyLevel, ConnectionPolicy connectionPolicy)
+        private void InitClient(ConsistencyLevel consistencyLevel, ConnectionPolicy connectionPolicy)
         {
             if (connectionPolicy == null)
             {
                 connectionPolicy = ConnectionPolicy.Default;
             }
 
-            this.documentClient = new DocumentClient(new Uri(this.endPoint), this.masterKey, connectionPolicy, consistencyLevel);
-        }
-
-        public DocumentCollectionInfo GetCollectionInfo()
-        {
-            return new DocumentCollectionInfo
-            {
-                Uri = new Uri(this.endPoint),
-                MasterKey = this.masterKey,
-                DatabaseName = this.databaseName,
-                CollectionName = this.collectionName
-            };
+            DocumentClient = new DocumentClient(new Uri(endPoint), masterKey, connectionPolicy, consistencyLevel);
         }
 
         public async Task<DocumentCollection> GetDocumentCollectionAsync()
         {
-            var documentCollectionTask = await this.documentClient.ReadDocumentCollectionAsync(
-                UriFactory.CreateDocumentCollectionUri(this.databaseName, this.collectionName));
+            var documentCollectionTask = await DocumentClient.ReadDocumentCollectionAsync(
+                UriFactory.CreateDocumentCollectionUri(DatabaseName, CollectionName));
             return documentCollectionTask;
         }
 
-        public async Task CreateCollectionIfNotExistsAsync()
+        public async Task CreateCollectionIfNotExistsAsync(CancellationToken token)
         {
+            await DocumentClient.CreateDatabaseIfNotExistsAsync(
+                new Database { Id = DatabaseName });
 
-            await documentClient.CreateDatabaseIfNotExistsAsync(
-                new Database { Id = this.databaseName });
+            var collection = new DocumentCollection();
 
-            DocumentCollection collection = new DocumentCollection();
-
-            collection.Id = this.collectionName;
-            if (!string.IsNullOrEmpty(this.partitionKey))
+            collection.Id = CollectionName;
+            if (!string.IsNullOrEmpty(partitionKey))
             {
-                collection.PartitionKey.Paths.Add(string.Format("/{0}", this.partitionKey));
+                collection.PartitionKey.Paths.Add($"/{partitionKey}");
             }
 
-            if (this.includePaths != null)
+            if (includePaths != null)
             {
                 collection.IndexingPolicy.Automatic = true;
                 collection.IndexingPolicy.IndexingMode = IndexingMode.Consistent;
@@ -119,10 +94,10 @@ namespace Common.SdkExtensions
 
                 foreach (var includePath in includePaths)
                 {
-                    IncludedPath path = new IncludedPath();
+                    var path = new IncludedPath();
 
-                    string[] pathInfo = includePath.Split('|');
-                    path.Path = string.Format("/{0}/?", pathInfo[0]);
+                    var pathInfo = includePath.Split('|');
+                    path.Path = $"/{pathInfo[0]}/?";
 
                     if (pathInfo[1].ToLower() == "string")
                     {
@@ -138,69 +113,70 @@ namespace Common.SdkExtensions
                 collection.IndexingPolicy.ExcludedPaths.Add(new ExcludedPath { Path = "/*" });
             }
 
-            if (this.ttlInDays > 0)
+            if (ttlInDays > 0)
             {
-                collection.DefaultTimeToLive = (this.ttlInDays * 86400);
+                collection.DefaultTimeToLive = ttlInDays * 86400;
             }
 
-            await documentClient.CreateDocumentCollectionIfNotExistsAsync(
-                    UriFactory.CreateDatabaseUri(this.databaseName),
+            await DocumentClient.CreateDocumentCollectionIfNotExistsAsync(
+                    UriFactory.CreateDatabaseUri(DatabaseName),
                     collection,
-                    new RequestOptions { OfferThroughput = this.throughput });
+                    new RequestOptions { OfferThroughput = throughput });
 
         }
-        public async Task CreateDocument(object doc, bool isUpsert = false)
+
+        public async Task CreateDocumentAsync(object doc, bool isUpsert = false)
         {
-            Uri collectionUri = UriFactory.CreateDocumentCollectionUri(this.databaseName, this.collectionName);
+            var collectionUri = UriFactory.CreateDocumentCollectionUri(DatabaseName, CollectionName);
             if (!isUpsert)
             {
-                await this.documentClient.CreateDocumentAsync(collectionUri, doc);
+                await DocumentClient.CreateDocumentAsync(collectionUri, doc);
                 return;
             }
-            await this.documentClient.UpsertDocumentAsync(collectionUri, doc);
+            await DocumentClient.UpsertDocumentAsync(collectionUri, doc);
         }
 
-        public async Task<Document> UpdateItem(Document oldDoc, object newDoc)
+        public async Task<Document> UpdateItemAsync(Document oldDoc, object newDoc)
         {
-            AccessCondition condition = new AccessCondition();
+            var condition = new AccessCondition();
             condition.Type = AccessConditionType.IfMatch;
             condition.Condition = oldDoc.ETag;
 
-            RequestOptions options = new RequestOptions();
+            var options = new RequestOptions();
             options.AccessCondition = condition;
 
-            ResourceResponse<Document> response =
-            await this.documentClient.ReplaceDocumentAsync(oldDoc.SelfLink, newDoc, options);
+            var response =
+            await DocumentClient.ReplaceDocumentAsync(oldDoc.SelfLink, newDoc, options);
             return response;
         }
 
         public async Task DeleteDocumentAsync(string docId, string partitionKey = null)
         {
             Console.WriteLine("\n1.7 - Deleting a document");
-            RequestOptions options = new RequestOptions();
+            var options = new RequestOptions();
             if (!string.IsNullOrEmpty(partitionKey))
             {
                 options.PartitionKey = new PartitionKey(partitionKey);
             }
-            ResourceResponse<Document> response = await this.documentClient.DeleteDocumentAsync(
-                UriFactory.CreateDocumentUri(databaseName, collectionName, docId),
+            var response = await DocumentClient.DeleteDocumentAsync(
+                UriFactory.CreateDocumentUri(DatabaseName, CollectionName, docId),
                 options);
 
             Console.WriteLine("Request charge of delete operation: {0}", response.RequestCharge);
             Console.WriteLine("StatusCode of operation: {0}", response.StatusCode);
         }
 
-        public async Task<List<object>> queryDocs(string queryText, string partitionKey = null)
+        public async Task<List<object>> QueryDocsAsync(string queryText, string partitionKey = null)
         {
-            List<object> docs = new List<object>();
+            var docs = new List<object>();
 
             // 0 maximum parallel tasks, effectively serial execution
-            FeedOptions options = null;
+            FeedOptions options;
             if (!string.IsNullOrEmpty(partitionKey))
             {
-                options = new FeedOptions()
+                options = new FeedOptions
                 {
-                    PartitionKey = new PartitionKey(partitionKey),
+                    PartitionKey = new PartitionKey(partitionKey)
                 };
             }
             else
@@ -214,8 +190,10 @@ namespace Common.SdkExtensions
                 };
             }
 
-            Uri collectionUri = UriFactory.CreateDocumentCollectionUri(this.databaseName, this.collectionName);
-                var query = this.documentClient.CreateDocumentQuery<object>(collectionUri, queryText, options).AsDocumentQuery();
+            var collectionUri = UriFactory.CreateDocumentCollectionUri(DatabaseName, CollectionName);
+
+            using (var query = DocumentClient.CreateDocumentQuery<object>(collectionUri, queryText, options).AsDocumentQuery())
+            {
                 while (query.HasMoreResults)
                 {
                     foreach (Document doc in await query.ExecuteNextAsync())
@@ -223,8 +201,11 @@ namespace Common.SdkExtensions
                         docs.Add(doc);
                     }
                 }
+                
                 return docs;
             }
 
         }
+
     }
+}

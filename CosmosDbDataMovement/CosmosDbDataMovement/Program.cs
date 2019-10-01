@@ -1,8 +1,8 @@
-﻿using System;
+using System;
 using System.Net;
 using System.Runtime.ExceptionServices;
+using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Azure.Documents.ChangeFeedProcessor.PartitionManagement;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SqlDataMovementLib.Sink;
@@ -10,60 +10,58 @@ using SqlDataMovementLib.Source;
 
 namespace CosmosDbDataMovement
 {
-    class Program
+    public class Program
     {
         static void Main(string[] args)
         {
-            MainAsync(args).GetAwaiter().GetResult();
+            MainAsync(CancellationToken.None).GetAwaiter().GetResult();
         }
 
-        static async Task MainAsync(string[] args)
+        internal static async Task MainAsync(CancellationToken token)
         {
             try
             {
                 //setup our DI
-                var serviceProvider = new ServiceCollection()
-                    .AddLogging((builder) =>
+                using (var serviceProvider = new ServiceCollection().AddLogging(builder =>
                     {
-                        builder
-                        .AddConsole()
-                        .SetMinimumLevel(LogLevel.Information);
+                        builder.AddConsole()
+                            .SetMinimumLevel(LogLevel.Information);
                     })
                     .AddSingleton<CosmosDbSink>()
-                    .BuildServiceProvider();
+                    .BuildServiceProvider())
+                {
+                    var loggerFactory = serviceProvider.GetService<ILoggerFactory>();
 
-                var loggerFactory = serviceProvider.GetService<ILoggerFactory>();
-                var logger = loggerFactory.CreateLogger<Program>();
-                logger.LogDebug("Starting application");
+                    var logger = loggerFactory.CreateLogger<Program>();
+                    logger.LogDebug("Starting application");
 
-                AppDomain.CurrentDomain.FirstChanceException +=
-                    new FirstChanceExceptionLogger(loggerFactory).FirstChanceHandler;
+                    AppDomain.CurrentDomain.FirstChanceException +=
+                        new FirstChanceExceptionLogger(loggerFactory).FirstChanceHandler;
 
-                // Set the maximum number of concurrent connections
-                ServicePointManager.DefaultConnectionLimit = 1200;
+                    // Set the maximum number of concurrent connections
+                    ServicePointManager.DefaultConnectionLimit = 1200;
 
-                var changeFeed = new ChangeFeed(new CosmosDbSink(loggerFactory), loggerFactory);
+                    var changeFeed = new ChangeFeed(new CosmosDbSink(loggerFactory), loggerFactory);
 
-                IChangeFeedProcessor processor = await changeFeed.StartAsync();
+                    var processor = await changeFeed.StartAsync(token);
 
-                logger.LogInformation("Changefeed started successfully");
+                    logger.LogInformation("Changefeed started successfully");
 
-                Console.WriteLine("Press any key to stop listening for changes...");
-                Console.ReadKey();
+                    Console.WriteLine("Press any key to stop listening for changes...");
+                    Console.ReadKey();
 
-                await processor.StopAsync();
+                    await processor.StopAsync();
+                }
             }
             catch(Exception error)
             {
                 Console.WriteLine("UNHANDLED EXCEPTION: {0}", error);
-
-                // TODO fabianm REMOVE
-                Console.ReadKey();
                 throw;
             }
+            
         }
 
-        class FirstChanceExceptionLogger
+        internal class FirstChanceExceptionLogger
         {
             private readonly ILogger logger;
 
@@ -71,13 +69,15 @@ namespace CosmosDbDataMovement
             {
                 if (loggerFactory == null) { throw new ArgumentNullException(nameof(loggerFactory)); }
 
-                this.logger = loggerFactory.CreateLogger<FirstChanceExceptionLogger>();
+                logger = loggerFactory.CreateLogger<FirstChanceExceptionLogger>();
             }
 
             public void FirstChanceHandler(object source, FirstChanceExceptionEventArgs e)
             {
-                this.logger.LogDebug("FirstChanceException event raised in {0}: {1}",
-                    AppDomain.CurrentDomain.FriendlyName, e.Exception);
+                logger.LogDebug(
+                    "FirstChanceException event raised in {0}: {1}",
+                    AppDomain.CurrentDomain.FriendlyName, 
+                    e.Exception);
             }
         }
     }

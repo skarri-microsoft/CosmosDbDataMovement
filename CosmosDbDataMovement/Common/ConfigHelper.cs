@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Configuration;
 using System.Linq;
@@ -16,16 +16,18 @@ namespace Common
             {
                 return DestinationType.CosmosDB;
             }
-            else if (ConfigurationManager.AppSettings["destinationType"].ToLower() == DestinationType.EventHub.ToString().ToLower())
+
+            if (ConfigurationManager.AppSettings["destinationType"].ToLower() == DestinationType.EventHub.ToString().ToLower())
             {
                 return DestinationType.EventHub;
             }
-            else if (ConfigurationManager.AppSettings["destinationType"].ToLower() == DestinationType.MongoDB.ToString().ToLower())
+
+            if (ConfigurationManager.AppSettings["destinationType"].ToLower() == DestinationType.MongoDB.ToString().ToLower())
             {
                 return DestinationType.MongoDB;
             }
 
-            string message =
+            var message =
                 $"Missing 'destination type in app.config'. Allowed values are '{DestinationType.CosmosDB}', '{DestinationType.EventHub}' and '{DestinationType.MongoDB}'";
             logger.LogError(message);
 
@@ -63,7 +65,7 @@ namespace Common
         {
             if (logger == null) { throw new ArgumentNullException(nameof(logger)); }
 
-            CosmosDbConfig cosmosDbConfig = new CosmosDbConfig()
+            var cosmosDbConfig = new CosmosDbConfig
             {
                 AccountEndPoint = ConfigurationManager.AppSettings["monitoredUri"],
                 Key = ConfigurationManager.AppSettings["monitoredSecretKey"],
@@ -79,7 +81,7 @@ namespace Common
         {
             if (logger == null) { throw new ArgumentNullException(nameof(logger)); }
 
-            CosmosDbConfig cosmosDbConfig = new CosmosDbConfig()
+            var cosmosDbConfig = new CosmosDbConfig
             {
                 AccountEndPoint = ConfigurationManager.AppSettings["leaseUri"],
                 Key = ConfigurationManager.AppSettings["leaseSecretKey"],
@@ -95,7 +97,7 @@ namespace Common
         {
             if (logger == null) { throw new ArgumentNullException(nameof(logger)); }
 
-            CosmosDbConfig cosmosDbConfig = new CosmosDbConfig()
+            var cosmosDbConfig = new CosmosDbConfig
             {
                 AccountEndPoint = ConfigurationManager.AppSettings["destUri"],
                 Key = ConfigurationManager.AppSettings["destSecretKey"],
@@ -117,7 +119,6 @@ namespace Common
             return cosmosDbConfig;
         }
 
-
         private static void ValidateConfig(
             ILogger logger,
             CosmosDbConfig config,
@@ -130,7 +131,7 @@ namespace Common
                 string.IsNullOrEmpty(config.DbName) ||
                 string.IsNullOrEmpty(config.CollectionName))
             {
-                string message = $"Missing values in app.config for Cosmos DB Config for collection type '{collectionType}'";
+                var message = $"Missing values in app.config for Cosmos DB Config for collection type '{collectionType}'";
                 logger.LogError(message);
 
                 throw new NotSupportedException(message);
@@ -141,7 +142,7 @@ namespace Common
         {
             if (logger == null) { throw new ArgumentNullException(nameof(logger)); }
 
-            CosmosDbConfig cosmosDbConfig = new CosmosDbConfig()
+            var cosmosDbConfig = new CosmosDbConfig
             {
                 AccountEndPoint = ConfigurationManager.AppSettings["endpoint"],
                 Key = ConfigurationManager.AppSettings["secretKey"],
@@ -174,7 +175,7 @@ namespace Common
         {
             if (logger == null) { throw new ArgumentNullException(nameof(logger)); }
 
-            EventHubConfig eventHubConfig = new EventHubConfig()
+            var eventHubConfig = new EventHubConfig
             {
                 ConnectionString = ConfigurationManager.AppSettings["destEhConnStr"]
             };
@@ -188,7 +189,7 @@ namespace Common
 
             if (string.IsNullOrEmpty(config.ConnectionString))
             {
-                string message = $"Missing value in app.config for '{eventHubType}' EventHub.";
+                var message = $"Missing value in app.config for '{eventHubType}' EventHub.";
                 logger.LogError(message);
 
                 throw new NotSupportedException(message);
@@ -204,7 +205,7 @@ namespace Common
         {
             if (logger == null) { throw new ArgumentNullException(nameof(logger)); }
 
-            AzureBlobConfig azureBlobConfig = new AzureBlobConfig()
+            var azureBlobConfig = new AzureBlobConfig
             {
                 ConnectionString = ConfigurationManager.AppSettings["storageConnStr"]
             };
@@ -219,7 +220,7 @@ namespace Common
 
             if (string.IsNullOrEmpty(config.ConnectionString))
             {
-                string message = $"Missing value in app.config for '{azureBlobType}' Azure Blob Store.";
+                var message = $"Missing value in app.config for '{azureBlobType}' Azure Blob Store.";
                 logger.LogError(message);
 
                 throw new NotSupportedException(message);
@@ -234,7 +235,7 @@ namespace Common
 
         public static ChangeFeedConfig GetChangeFeedConfig()
         {
-            ChangeFeedConfig changeFeedConfig = new ChangeFeedConfig()
+            var changeFeedConfig = new ChangeFeedConfig
             {
                 MaxItemCount = int.Parse(ConfigurationManager.AppSettings["cfMaxItemCount"]),
                 LeaseRenewInterval =

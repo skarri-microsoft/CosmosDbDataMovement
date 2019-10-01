@@ -5,9 +5,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Azure.CosmosDB.BulkExecutor" Version="2.3.0-preview2" />
+    <PackageReference Include="ErrorProne.NET.CoreAnalyzers" Version="0.1.2" />
+    <PackageReference Include="IDisposableAnalyzers" Version="2.1.2" />
+    <PackageReference Include="Microsoft.Azure.CosmosDB.BulkExecutor" Version="2.4.0-preview" />
     <PackageReference Include="Microsoft.Azure.DocumentDB.Core" Version="2.7.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="3.0.0" />
+    <PackageReference Include="Microsoft.VisualStudio.Threading.Analyzers" Version="16.4.16" />
+    <PackageReference Include="System.Net.NameResolution" Version="4.3.0" />
   </ItemGroup>
 
   <ItemGroup>

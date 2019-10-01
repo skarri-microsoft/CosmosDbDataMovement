@@ -1,8 +1,10 @@
-﻿using System;
+using System;
 using System.Configuration;
 using System.IO;
 using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.WindowsAzure.Storage;
 using Microsoft.WindowsAzure.Storage.Blob;
@@ -11,92 +13,99 @@ namespace Common
 {
     public class AzureBlobUploader
     {
+        private readonly string containername;
+
         private readonly CloudStorageAccount storageAccount =
             CloudStorageAccount.Parse(ConfigurationManager.AppSettings["storageConnStr"]);
-        private readonly CloudBlobClient blobClient;
-        private readonly CloudBlobContainer container;
-
+        
         public AzureBlobUploader(string containername)
         {
-            // Create the blob client.
-            blobClient = storageAccount.CreateCloudBlobClient();
-            container = blobClient.GetContainerReference(containername);
+            this.containername = containername;
+        }
+
+        private async Task<CloudBlobContainer> EnsureContainerExistAsync(CancellationToken cancellationToken)
+        {
+            CloudBlobClient blobClient = storageAccount.CreateCloudBlobClient();
+            var container = blobClient.GetContainerReference(containername);
+
             try
             {
-                container.CreateIfNotExistsAsync().Wait();
+                await container.CreateIfNotExistsAsync();
             }
             catch (Exception e)
             {
                 Console.WriteLine(e);
                 throw;
             }
-            
+
+            return container;
         }
 
-        public async Task<CloudBlob> UploadTextAsync(string data, string fileName)
+        public async Task<CloudBlob> UploadTextAsync(string data, string fileName, CancellationToken cancellationToken)
         {
-            CloudBlockBlob blob = container.GetBlockBlobReference(fileName);
+            var container = await EnsureContainerExistAsync(cancellationToken);
+            var blob = container.GetBlockBlobReference(fileName);
             await blob.UploadTextAsync(data);
             return blob;
         }
 
-
-        public CloudBlockBlob UploadBlob(byte[] data, string filename, bool compressed = true)
+        public async Task<CloudBlockBlob> UploadBlobAsync(byte[] data, string filename, bool compressed = true, CancellationToken token = default)
         {
-
-            string origMD5 = MD5(data);
+            var origMD5 = MD5(data);
 
             if (compressed)
             {
-                using (MemoryStream comp = new MemoryStream())
+                using (var comp = new MemoryStream())
                 {
-                    using (GZipStream gzip = new GZipStream(comp, CompressionLevel.Optimal))
+                    using (var gzip = new GZipStream(comp, CompressionLevel.Optimal))
                     {
-                        gzip.Write(data, 0, data.Length);
+                        await gzip.WriteAsync(data, 0, data.Length, token);
                     }
+
                     data = comp.ToArray();
                 }
             }
 
-            CloudBlockBlob blob = container.GetBlockBlobReference(filename);
+            var container = await EnsureContainerExistAsync(token);
+            var blob = container.GetBlockBlobReference(filename);
             blob.Metadata.Add("compressed", compressed.ToString());
             blob.Metadata.Add("origMD5", origMD5);
-            blob.UploadFromByteArrayAsync(data, 0, data.Length).Wait();
+            await blob.UploadFromByteArrayAsync(data, 0, data.Length);
             return blob;
         }
 
-        public byte[] DownloadBlob(string filename)
+        public async Task<byte[]> DownloadBlobAsync(string filename, CancellationToken cancellationToken)
         {
-            CloudBlockBlob blob = container.GetBlockBlobReference(filename);
+            var container = await EnsureContainerExistAsync(cancellationToken);
+            var blob = container.GetBlockBlobReference(filename);
 
             byte[] data;
 
-            using (MemoryStream ms = new MemoryStream())
+            using (var ms = new MemoryStream())
             {
-                blob.DownloadToStreamAsync(ms).Wait();
+                await blob.DownloadToStreamAsync(ms);
                 ms.Seek(0, SeekOrigin.Begin);
                 data = ms.ToArray();
             }
 
-            blob.FetchAttributesAsync().Wait();
+            await blob.FetchAttributesAsync();
 
             if (Convert.ToBoolean(blob.Metadata["compressed"]))
             {
-                using (MemoryStream comp = new MemoryStream(data))
+                using (var comp = new MemoryStream(data))
+                using (var decomp = new MemoryStream())
                 {
-                    using (MemoryStream decomp = new MemoryStream())
+                    using (var gzip = new GZipStream(comp, CompressionMode.Decompress))
                     {
-                        using (GZipStream gzip = new GZipStream(comp, CompressionMode.Decompress))
-                        {
-                            gzip.CopyTo(decomp);
-                        }
-                        data = decomp.ToArray();
+                        await gzip.CopyToAsync(decomp);
                     }
+
+                    data = decomp.ToArray();
                 }
             }
 
-            string origMD5 = blob.Metadata["origMD5"];
-            string newMD5 = MD5(data);
+            var origMD5 = blob.Metadata["origMD5"];
+            var newMD5 = MD5(data);
 
             if (origMD5 != newMD5)
             {
@@ -108,15 +117,19 @@ namespace Common
 
         private static string MD5(byte[] data)
         {
-            MD5CryptoServiceProvider x = new System.Security.Cryptography.MD5CryptoServiceProvider();
-            byte[] bs = data;
-            bs = x.ComputeHash(bs);
-            System.Text.StringBuilder s = new System.Text.StringBuilder();
-            foreach (byte b in bs)
+            using (var x = new MD5CryptoServiceProvider())
             {
-                s.Append(b.ToString("x2").ToLower());
+                var bs = data;
+                bs = x.ComputeHash(bs);
+
+                var s = new StringBuilder();
+                foreach (var b in bs)
+                {
+                    s.Append(b.ToString("x2").ToLower());
+                }
+
+                return s.ToString();
             }
-            return s.ToString();
         }
     }
 }

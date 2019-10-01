@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Tasks;
 using Common.SdkExtensions;
 using Microsoft.Azure.Documents;
 using Microsoft.Azure.Documents.ChangeFeedProcessor.FeedProcessing;
@@ -11,26 +12,26 @@ namespace Common.SinkContracts
 {
     public interface ICosmosDbSink
     {
-          void IngestDocs(
-            SqlClientExtension client,
-            IChangeFeedObserverContext context,
-            IReadOnlyList<Document> docs,
-            CancellationToken cancellationToken,
-            Uri destinationCollectionUri);
+          Task IngestDocsAsync(
+              SqlClientExtension client,
+              IChangeFeedObserverContext context,
+              IReadOnlyList<Document> docs,
+              Uri destinationCollectionUri,
+              CancellationToken cancellationToken);
 
-         void IngestDocsInBulk(
-            SqlClientExtension client,
-            IChangeFeedObserverContext context,
-            IReadOnlyList<Document> docs,
-            CancellationToken cancellationToken,
-            Uri destinationCollectionUri);
+          Task IngestDocsInBulkAsync(
+              SqlClientExtension client,
+              IChangeFeedObserverContext context,
+              IReadOnlyList<Document> docs,
+              Uri destinationCollectionUri,
+              CancellationToken cancellationToken);
 
-        void IngestDocs(
-            IMongoCollection<BsonDocument> mongoCollection,
-            int insertRetries,
-            IChangeFeedObserverContext context,
-            IReadOnlyList<Document> docs,
-            CancellationToken cancellationToken,
-            Uri destinationCollectionUri);
+          Task IngestDocsAsync(
+              IMongoCollection<BsonDocument> mongoCollection,
+              int insertRetries,
+              IChangeFeedObserverContext context,
+              IReadOnlyList<Document> docs,
+              Uri destinationCollectionUri,
+              CancellationToken cancellationToken);
     }
 }

@@ -1,12 +1,11 @@
-﻿using System;
+using System;
 using Common.SdkExtensions;
 using Common.SinkContracts;
+using Microsoft.Azure.Documents.ChangeFeedProcessor.FeedProcessing;
 using Microsoft.Azure.EventHubs;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Driver;
-using IChangeFeedObserver = Microsoft.Azure.Documents.ChangeFeedProcessor.FeedProcessing.IChangeFeedObserver;
-using IChangeFeedObserverFactory = Microsoft.Azure.Documents.ChangeFeedProcessor.FeedProcessing.IChangeFeedObserverFactory;
 
 namespace Common.ChangeFeed
 {
@@ -17,7 +16,7 @@ namespace Common.ChangeFeed
         private readonly SqlClientExtension destClient;
         private readonly EventHubClient eventHubClient;
         private readonly IMongoCollection<BsonDocument> destDocStoreCollection;
-        private readonly DestinationType? destinationType = null;
+        private readonly DestinationType? destinationType;
         private readonly ICosmosDbSink cosmosDbSink;
         private readonly int insertRetries;
 
@@ -26,27 +25,21 @@ namespace Common.ChangeFeed
             ICosmosDbSink cosmosDbSink,
             ILoggerFactory loggerFactory)
         {
-            if (destClient == null) { throw new ArgumentNullException(nameof(destClient)); }
-            if (cosmosDbSink == null) { throw new ArgumentNullException(nameof(cosmosDbSink)); }
-            if (loggerFactory == null) { throw new ArgumentNullException(nameof(loggerFactory)); }
-
-            this.destinationType = DestinationType.CosmosDB;
-            this.destClient = destClient;
-            this.cosmosDbSink = cosmosDbSink;
-            this.loggerFactory = loggerFactory;
-            this.logger = loggerFactory.CreateLogger<ChangeFeedObserverFactory>();
+            destinationType = DestinationType.CosmosDB;
+            this.destClient = destClient ?? throw new ArgumentNullException(nameof(destClient));
+            this.cosmosDbSink = cosmosDbSink ?? throw new ArgumentNullException(nameof(cosmosDbSink));
+            this.loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+            logger = loggerFactory.CreateLogger<ChangeFeedObserverFactory>();
         }
 
         public ChangeFeedObserverFactory(
             EventHubClient eventHubClient,
             ILoggerFactory loggerFactory)
         {
-            if (eventHubClient == null) { throw new ArgumentNullException(nameof(eventHubClient)); }
-            if (loggerFactory == null) { throw new ArgumentNullException(nameof(loggerFactory)); }
-            this.destinationType = DestinationType.EventHub;
-            this.eventHubClient = eventHubClient;
-            this.loggerFactory = loggerFactory;
-            this.logger = loggerFactory.CreateLogger<ChangeFeedObserverFactory>(); ;
+            destinationType = DestinationType.EventHub;
+            this.eventHubClient = eventHubClient ?? throw new ArgumentNullException(nameof(eventHubClient));
+            this.loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+            logger = loggerFactory.CreateLogger<ChangeFeedObserverFactory>();
         }
 
         public ChangeFeedObserverFactory(
@@ -55,56 +48,55 @@ namespace Common.ChangeFeed
             ICosmosDbSink cosmosDbSink,
             ILoggerFactory loggerFactory)
         {
-            if (destDocStoreCollection == null) { throw new ArgumentNullException(nameof(destDocStoreCollection)); }
-            if (loggerFactory == null) { throw new ArgumentNullException(nameof(loggerFactory)); }
-
-            this.destinationType = DestinationType.MongoDB;
-            this.destDocStoreCollection = destDocStoreCollection;
+            destinationType = DestinationType.MongoDB;
+            this.destDocStoreCollection = destDocStoreCollection ?? throw new ArgumentNullException(nameof(destDocStoreCollection));
             this.insertRetries = insertRetries;
             this.cosmosDbSink = cosmosDbSink;
-            this.loggerFactory = loggerFactory;
-            this.logger = loggerFactory.CreateLogger<ChangeFeedObserverFactory>();
+            this.loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+            logger = loggerFactory.CreateLogger<ChangeFeedObserverFactory>();
         }
 
         public IChangeFeedObserver CreateObserver()
         {
             if (destinationType == null)
             {
-                this.logger.LogError("Destination type is not defined");
+                logger.LogError("Destination type is not defined");
 
                 throw new NotSupportedException("Destination type is not defined");
             }
 
-            if (this.destinationType == DestinationType.EventHub)
+            if (destinationType == DestinationType.EventHub)
             {
-                EventHubFeedObserver newConsumer = new EventHubFeedObserver(this.eventHubClient, this.loggerFactory);
+                var newConsumer = new EventHubFeedObserver(eventHubClient, loggerFactory);
 
                 return newConsumer;
             }
-            else if (this.destinationType == DestinationType.CosmosDB)
+
+            if (destinationType == DestinationType.CosmosDB)
             {
-                CosmosDbFeedObserver cosmosDbFeedConsumer =
+                var cosmosDbFeedConsumer =
                     new CosmosDbFeedObserver(
-                        this.destClient,
-                        this.cosmosDbSink,
-                        this.loggerFactory);
+                        destClient,
+                        cosmosDbSink,
+                        loggerFactory);
 
                 return cosmosDbFeedConsumer;
             }
-            else if (this.destinationType == DestinationType.MongoDB)
+
+            if (destinationType == DestinationType.MongoDB)
             {
-                CosmosDbFeedObserver cosmosDbFeedConsumer =
+                var cosmosDbFeedConsumer =
                     new CosmosDbFeedObserver(
-                        this.destDocStoreCollection,
+                        destDocStoreCollection,
                         insertRetries,
-                        this.cosmosDbSink,
-                        this.loggerFactory);
+                        cosmosDbSink,
+                        loggerFactory);
 
                 return cosmosDbFeedConsumer;
             }
 
-            string message = $"Destination type '{this.destinationType}' is not supported.";
-            this.logger.LogError(message);
+            var message = $"Destination type '{destinationType}' is not supported.";
+            logger.LogError(message);
             throw new NotSupportedException(message);
         }
     }

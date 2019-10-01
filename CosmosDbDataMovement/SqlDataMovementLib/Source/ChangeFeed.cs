@@ -1,5 +1,6 @@
-﻿using System;
+using System;
 using System.Configuration;
+using System.Threading;
 using System.Threading.Tasks;
 using Common;
 using Common.ChangeFeed;
@@ -12,6 +13,7 @@ using Microsoft.Azure.Documents.Client;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using IChangeFeedObserverFactory = Microsoft.Azure.Documents.ChangeFeedProcessor.FeedProcessing.IChangeFeedObserverFactory;
 
 namespace SqlDataMovementLib.Source
 {
@@ -21,9 +23,9 @@ namespace SqlDataMovementLib.Source
         private readonly ILogger logger;
         private readonly ILoggerFactory loggerFactory;
 
-        private CosmosDbConfig monitorCollection = null;
-        private CosmosDbConfig leaseCollection = null;
-        private CosmosDbConfig destinationCollection = null;
+        private CosmosDbConfig monitorCollection;
+        private CosmosDbConfig leaseCollection;
+        private CosmosDbConfig destinationCollection;
 
         private SqlClientExtension monitorClientExtension;
         private SqlClientExtension leaseClientExtension;
@@ -32,7 +34,7 @@ namespace SqlDataMovementLib.Source
         private static MongoClient destMongoClient;
         private static readonly string destDbName = ConfigurationManager.AppSettings["mongodestDbName"];
         private static readonly string destCollectionName = ConfigurationManager.AppSettings["mongodestCollectionName"];
-        private static readonly int insertRetries = Int32.Parse(ConfigurationManager.AppSettings["insertRetries"]);
+        private static readonly int insertRetries = int.Parse(ConfigurationManager.AppSettings["insertRetries"]);
         private static IMongoDatabase destDatabase;
         private static IMongoCollection<BsonDocument> destDocStoreCollection;
 
@@ -40,18 +42,15 @@ namespace SqlDataMovementLib.Source
             ICosmosDbSink cosmosDbSink,
             ILoggerFactory loggerFactory)
         {
-            if (cosmosDbSink == null) { throw new ArgumentNullException(nameof(cosmosDbSink)); }
-            if (loggerFactory == null) { throw new ArgumentNullException(nameof(loggerFactory)); }
-
-            this.cosmosDbSink = cosmosDbSink;
-            this.loggerFactory = loggerFactory;
-            this.logger = loggerFactory.CreateLogger<ChangeFeed>();
+            this.cosmosDbSink = cosmosDbSink ?? throw new ArgumentNullException(nameof(cosmosDbSink));
+            this.loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+            logger = loggerFactory.CreateLogger<ChangeFeed>();
         }
 
-        public async Task<IChangeFeedProcessor> StartAsync()
+        public async Task<IChangeFeedProcessor> StartAsync(CancellationToken token)
         {
-            monitorCollection = CosmosDbConfig.GetMonitorConfig(this.logger);
-            leaseCollection = CosmosDbConfig.GetLeaseConfig(this.logger);
+            monitorCollection = CosmosDbConfig.GetMonitorConfig(logger);
+            leaseCollection = CosmosDbConfig.GetLeaseConfig(logger);
 
             monitorClientExtension = new SqlClientExtension(
                 monitorCollection,
@@ -63,11 +62,11 @@ namespace SqlDataMovementLib.Source
                 ConsistencyLevel.Session,
                 ConnectionPolicy.Default);
 
-            DestinationType? destinationType = ConfigHelper.GetDestinationType(this.logger);
+            var destinationType = ConfigHelper.GetDestinationType(logger);
 
             if (destinationType == DestinationType.CosmosDB)
             {
-                destinationCollection = CosmosDbConfig.GetDestinationConfig(this.logger);
+                destinationCollection = CosmosDbConfig.GetDestinationConfig(logger);
 
                 destClientExtension = new SqlClientExtension(
                     destinationCollection,
@@ -76,9 +75,9 @@ namespace SqlDataMovementLib.Source
             }
             else if (destinationType == DestinationType.MongoDB)
             {
-                string destConnectionString =
+                var destConnectionString =
                     ConfigurationManager.AppSettings["dest-conn"];
-                MongoClientSettings destSettings = MongoClientSettings.FromUrl(
+                var destSettings = MongoClientSettings.FromUrl(
                     new MongoUrl(destConnectionString)
                 );
                 destMongoClient = new MongoClient(destSettings);
@@ -87,29 +86,29 @@ namespace SqlDataMovementLib.Source
             }
 
             // Not advised to use this code in production.
-            this.CreateCollectionsInDevMode();
+            await CreateCollectionsInDevModeAsync(token);
 
-            return await this.RunChangeFeedHostAsync();
+            return await RunChangeFeedHostAsync();
         }
 
-        public void CreateCollectionsInDevMode()
+        public async Task CreateCollectionsInDevModeAsync(CancellationToken token)
         {
             if (!ConfigHelper.IsDevMode())
             {
                 return;
             }
-            this.monitorClientExtension.CreateCollectionIfNotExistsAsync().Wait();
-            this.leaseClientExtension.CreateCollectionIfNotExistsAsync().Wait();
-            if (ConfigHelper.GetDestinationType(this.logger) == DestinationType.CosmosDB)
+            await monitorClientExtension.CreateCollectionIfNotExistsAsync(token);
+            await leaseClientExtension.CreateCollectionIfNotExistsAsync(token);
+            if (ConfigHelper.GetDestinationType(logger) == DestinationType.CosmosDB)
             {
-                this.destClientExtension.CreateCollectionIfNotExistsAsync().Wait();
+                await destClientExtension.CreateCollectionIfNotExistsAsync(token);
             }
         }
 
         public async Task<IChangeFeedProcessor> RunChangeFeedHostAsync()
         {
             // monitored collection info 
-            DocumentCollectionInfo monitorDocumentCollectionLocation = new DocumentCollectionInfo
+            var monitorDocumentCollectionLocation = new DocumentCollectionInfo
             {
                 Uri = new Uri(monitorCollection.AccountEndPoint),
                 MasterKey = monitorCollection.Key,
@@ -118,7 +117,7 @@ namespace SqlDataMovementLib.Source
             };
 
             // lease collection info 
-            DocumentCollectionInfo leaseCollectionLocation = new DocumentCollectionInfo
+            var leaseCollectionLocation = new DocumentCollectionInfo
             {
                 Uri = new Uri(leaseCollection.AccountEndPoint),
                 MasterKey = leaseCollection.Key,
@@ -126,39 +125,42 @@ namespace SqlDataMovementLib.Source
                 CollectionName = leaseCollection.CollectionName
             };
 
-            DestinationType? destinationType = ConfigHelper.GetDestinationType(this.logger);
+            var destinationType = ConfigHelper.GetDestinationType(logger);
 
             if (destinationType == null)
             {
-                this.logger.LogError("Unsupported destination type. Supported only Cosmos DB and Event Hub. " +
-                                "Please update your app.config", true);
+                logger.LogError(
+                    "Unsupported destination type. Supported only Cosmos DB and Event Hub. " +
+                    "Please update your app.config", true);
             }
 
             if (destinationType == DestinationType.CosmosDB)
             {
-                return await RunCosmosDBSink(monitorDocumentCollectionLocation, leaseCollectionLocation);
+                return await RunCosmosDbSinkAsync(monitorDocumentCollectionLocation, leaseCollectionLocation);
             }
-            else if (destinationType == DestinationType.EventHub)
+
+            if (destinationType == DestinationType.EventHub)
             {
-                return await RunEventHubSink(monitorDocumentCollectionLocation, leaseCollectionLocation);
+                return await RunEventHubSinkAsync(monitorDocumentCollectionLocation, leaseCollectionLocation);
             }
-            else if (destinationType == DestinationType.MongoDB)
+
+            if (destinationType == DestinationType.MongoDB)
             {
-                return await RunMongoDBSink(monitorDocumentCollectionLocation, leaseCollectionLocation);
+                return await RunMongoDbSinkAsync(monitorDocumentCollectionLocation, leaseCollectionLocation);
             }
 
             throw new NotSupportedException($"Unexpected destination type '{destinationType}'!");
         }
 
-        public async Task<IChangeFeedProcessor> RunCosmosDBSink(
+        public async Task<IChangeFeedProcessor> RunCosmosDbSinkAsync(
             DocumentCollectionInfo monitorDocumentCollectionInfo,
             DocumentCollectionInfo leaseDocumentCollectionInfo)
         {
-            string hostName = Guid.NewGuid().ToString();
-            this.logger.LogInformation("Cosmos DB Sink Host name {0}", hostName);
+            var hostName = Guid.NewGuid().ToString();
+            logger.LogInformation("Cosmos DB Sink Host name {0}", hostName);
 
             // destination collection info 
-            DocumentCollectionInfo destCollInfo = new DocumentCollectionInfo
+            var destCollInfo = new DocumentCollectionInfo
             {
                 Uri = new Uri(destinationCollection.AccountEndPoint),
                 MasterKey = destinationCollection.Key,
@@ -166,53 +168,55 @@ namespace SqlDataMovementLib.Source
                 CollectionName = destinationCollection.CollectionName
             };
 
-            DocumentClient destClient = new DocumentClient(destCollInfo.Uri, destCollInfo.MasterKey);
+            var destClient = new DocumentClient(destCollInfo.Uri, destCollInfo.MasterKey);
             
-            ChangeFeedObserverFactory docConsumerFactory = new ChangeFeedObserverFactory(
+            var docConsumerFactory = new ChangeFeedObserverFactory(
                 destClientExtension,
                 cosmosDbSink,
-                this.loggerFactory);
+                loggerFactory);
 
-            return await GetChangeFeedProcessor(
+            return await GetChangeFeedProcessorAsync(
                 docConsumerFactory,
                 hostName,
                 monitorDocumentCollectionInfo,
                 leaseDocumentCollectionInfo);
         }
 
-        public async Task<IChangeFeedProcessor> RunMongoDBSink(
+        public async Task<IChangeFeedProcessor> RunMongoDbSinkAsync(
             DocumentCollectionInfo monitorDocumentCollectionInfo,
             DocumentCollectionInfo leaseDocumentCollectionInfo)
         {
-            string hostName = Guid.NewGuid().ToString();
-            this.logger.LogInformation("Mongo DB Sink Host name {0}", hostName);
+            var hostName = Guid.NewGuid().ToString();
+            logger.LogInformation("Mongo DB Sink Host name {0}", hostName);
 
-            ChangeFeedObserverFactory docConsumerFactory = new ChangeFeedObserverFactory(
+            var docConsumerFactory = new ChangeFeedObserverFactory(
                 destDocStoreCollection,
                 insertRetries,
                 cosmosDbSink,
-                this.loggerFactory);
+                loggerFactory);
 
-            return await GetChangeFeedProcessor(
+            return await GetChangeFeedProcessorAsync(
                 docConsumerFactory,
                 hostName,
                 monitorDocumentCollectionInfo,
                 leaseDocumentCollectionInfo);
         }
 
-        public async Task<IChangeFeedProcessor> GetChangeFeedProcessor(
-            Microsoft.Azure.Documents.ChangeFeedProcessor.FeedProcessing.IChangeFeedObserverFactory changeFeedObserverFactory,
+        public async Task<IChangeFeedProcessor> GetChangeFeedProcessorAsync(
+            IChangeFeedObserverFactory changeFeedObserverFactory,
             string hostName,
             DocumentCollectionInfo monitorDocumentCollectionInfo,
             DocumentCollectionInfo leaseDocumentCollectionInfo)
         {
-            ChangeFeedConfig changeFeedConfig=ChangeFeedConfig.GetChangeFeedConfig();
-            ChangeFeedProcessorOptions processorOptions = new ChangeFeedProcessorOptions();
-            processorOptions.StartFromBeginning = true;
-            processorOptions.MaxItemCount = changeFeedConfig.MaxItemCount;
-            processorOptions.LeaseRenewInterval = changeFeedConfig.LeaseRenewInterval;
+            var changeFeedConfig=ChangeFeedConfig.GetChangeFeedConfig();
+            var processorOptions = new ChangeFeedProcessorOptions
+            {
+                StartFromBeginning = true,
+                MaxItemCount = changeFeedConfig.MaxItemCount,
+                LeaseRenewInterval = changeFeedConfig.LeaseRenewInterval
+            };
 
-            this.logger.LogInformation("Processor options Starts from Beginning - {0}, Lease renew interval - {1}",
+            logger.LogInformation("Processor options Starts from Beginning - {0}, Lease renew interval - {1}",
                 processorOptions.StartFromBeginning,
                 processorOptions.LeaseRenewInterval.ToString());
 
@@ -223,19 +227,19 @@ namespace SqlDataMovementLib.Source
                 .WithLeaseCollection(leaseDocumentCollectionInfo)
                 .WithProcessorOptions(processorOptions)
                 .BuildAsync();
-            await processor.StartAsync().ConfigureAwait(false);
+            await processor.StartAsync();
             return processor;
         }
 
-        public async Task<IChangeFeedProcessor> RunEventHubSink(
+        public async Task<IChangeFeedProcessor> RunEventHubSinkAsync(
             DocumentCollectionInfo monitorDocumentCollectionInfo,
             DocumentCollectionInfo leaseDocumentCollectionInfo)
         {
-            string hostName = Guid.NewGuid().ToString();
-            this.logger.LogInformation("Event Hub Sink Host name {0}", hostName);
-            ChangeFeedObserverFactory docConsumerFactory = new ChangeFeedObserverFactory(null, this.loggerFactory);
+            var hostName = Guid.NewGuid().ToString();
+            logger.LogInformation("Event Hub Sink Host name {0}", hostName);
+            var docConsumerFactory = new ChangeFeedObserverFactory(null, loggerFactory);
 
-            return await GetChangeFeedProcessor(
+            return await GetChangeFeedProcessorAsync(
                 docConsumerFactory,
                 hostName,
                 monitorDocumentCollectionInfo,

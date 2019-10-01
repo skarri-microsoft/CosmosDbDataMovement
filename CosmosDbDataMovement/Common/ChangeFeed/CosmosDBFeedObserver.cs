@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,8 +10,6 @@ using Microsoft.Azure.Documents.Client;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Driver;
-using ChangeFeedObserverCloseReason = Microsoft.Azure.Documents.ChangeFeedProcessor.FeedProcessing.ChangeFeedObserverCloseReason;
-using IChangeFeedObserver = Microsoft.Azure.Documents.ChangeFeedProcessor.FeedProcessing.IChangeFeedObserver;
 
 namespace Common.ChangeFeed
 {
@@ -30,17 +28,15 @@ namespace Common.ChangeFeed
             ICosmosDbSink cosmosDbSink,
             ILoggerFactory loggerFactory)
         {
-            if (client == null) { throw new ArgumentNullException(nameof(client)); }
-            if (cosmosDbSink == null) { throw new ArgumentNullException(nameof(cosmosDbSink)); }
             if (loggerFactory == null) { throw new ArgumentNullException(nameof(loggerFactory)); }
 
-            this.logger = loggerFactory.CreateLogger<CosmosDbFeedObserver>();
-            this.client = client;
-            this.destinationCollectionUri = UriFactory.CreateDocumentCollectionUri(
+            logger = loggerFactory.CreateLogger<CosmosDbFeedObserver>();
+            this.client = client ?? throw new ArgumentNullException(nameof(client));
+            destinationCollectionUri = UriFactory.CreateDocumentCollectionUri(
                 client.DatabaseName, 
                 client.CollectionName);
-            this.cosmosDbSink = cosmosDbSink;
-            this.isBulkIngestion = ConfigHelper.IsBulkIngestion();
+            this.cosmosDbSink = cosmosDbSink ?? throw new ArgumentNullException(nameof(cosmosDbSink));
+            isBulkIngestion = ConfigHelper.IsBulkIngestion();
         }
 
         public CosmosDbFeedObserver(
@@ -49,27 +45,25 @@ namespace Common.ChangeFeed
             ICosmosDbSink cosmosDbSink,
             ILoggerFactory loggerFactory)
         {
-            if (destDocStoreCollection == null) { throw new ArgumentNullException(nameof(destDocStoreCollection)); }
-            if (cosmosDbSink == null) { throw new ArgumentNullException(nameof(cosmosDbSink)); }
             if (loggerFactory == null) { throw new ArgumentNullException(nameof(loggerFactory)); }
 
-            this.logger = loggerFactory.CreateLogger<CosmosDbFeedObserver>();
-            this.destDocStoreCollection = destDocStoreCollection;
+            logger = loggerFactory.CreateLogger<CosmosDbFeedObserver>();
+            this.destDocStoreCollection = destDocStoreCollection ?? throw new ArgumentNullException(nameof(destDocStoreCollection));
             this.insertRetries = insertRetries;
-            this.cosmosDbSink = cosmosDbSink;
-            this.isBulkIngestion = ConfigHelper.IsBulkIngestion();
+            this.cosmosDbSink = cosmosDbSink ?? throw new ArgumentNullException(nameof(cosmosDbSink));
+            isBulkIngestion = ConfigHelper.IsBulkIngestion();
         }
 
         public Task OpenAsync(IChangeFeedObserverContext context)
         {
-            this.logger.LogInformation("Observer opened, {0}", context.PartitionKeyRangeId);
+            logger.LogInformation("Observer opened, {0}", context.PartitionKeyRangeId);
             return Task.CompletedTask;
         }
 
         public Task CloseAsync(IChangeFeedObserverContext context, ChangeFeedObserverCloseReason reason)
         {
-            this.logger.LogInformation("Observer closed, {0}", context.PartitionKeyRangeId);
-            this.logger.LogInformation("Reason for shutdown, {0}", reason);
+            logger.LogInformation("Observer closed, {0}", context.PartitionKeyRangeId);
+            logger.LogInformation("Reason for shutdown, {0}", reason);
             return Task.CompletedTask;
         }
 
@@ -78,37 +72,37 @@ namespace Common.ChangeFeed
             IReadOnlyList<Document> docs,
             CancellationToken cancellationToken)
         {
-            if (this.client != null)
+            if (client != null)
             {
                 if (!isBulkIngestion)
                 {
-                    cosmosDbSink.IngestDocs(
-                        this.client,
+                    await cosmosDbSink.IngestDocsAsync(
+                        client,
                         context,
                         docs,
-                        cancellationToken,
-                        this.destinationCollectionUri);
+                        destinationCollectionUri, 
+                        cancellationToken);
                 }
                 else
                 {
-                    cosmosDbSink.IngestDocsInBulk(
-                        this.client,
+                    await cosmosDbSink.IngestDocsInBulkAsync(
+                        client,
                         context,
                         docs,
-                        cancellationToken,
-                        this.destinationCollectionUri);
+                        destinationCollectionUri, 
+                        cancellationToken);
                 }
             }
-            else if(destDocStoreCollection!=null)
+            else if(destDocStoreCollection != null)
             {
                
-                    cosmosDbSink.IngestDocs(
-                        this.destDocStoreCollection,
+                await cosmosDbSink.IngestDocsAsync(
+                        destDocStoreCollection,
                         insertRetries,
                         context,
                         docs,
-                        cancellationToken,
-                        this.destinationCollectionUri);
+                        destinationCollectionUri, 
+                        cancellationToken);
               
             }
         }

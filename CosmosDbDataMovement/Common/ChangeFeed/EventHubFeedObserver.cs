@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
@@ -12,9 +12,9 @@ namespace Common.ChangeFeed
 {
     public class EventHubFeedObserver : IChangeFeedObserver
     {
-        const int MaxBatchSizeInBytes = 2 * 1000 * 1000;
-        const int MaxCompressedSizeInBytes = 256 * 1000;
-        const string AzureBlobErrorsContainer = "EventHubSinkErrorsData";
+        internal const int MaxBatchSizeInBytes = 2 * 1000 * 1000;
+        internal const int MaxCompressedSizeInBytes = 256 * 1000;
+        internal const string AzureBlobErrorsContainer = "EventHubSinkErrorsData";
 
         private readonly ILogger logger;
         private readonly EventHubClient eventHubClient;
@@ -23,39 +23,37 @@ namespace Common.ChangeFeed
             EventHubClient eventHubClient,
             ILoggerFactory loggerFactory)
         {
-            if (eventHubClient == null) { throw new ArgumentNullException(nameof(eventHubClient)); }
             if (loggerFactory == null) { throw new ArgumentNullException(nameof(loggerFactory)); }
 
-            this.logger = loggerFactory.CreateLogger<EventHubFeedObserver>();
-            this.eventHubClient = eventHubClient;
+            logger = loggerFactory.CreateLogger<EventHubFeedObserver>();
+            this.eventHubClient = eventHubClient ?? throw new ArgumentNullException(nameof(eventHubClient));
         }
 
         public Task OpenAsync(IChangeFeedObserverContext context)
         {
             if (context == null) throw new ArgumentNullException(nameof(context));
 
-            this.logger.LogInformation("Observer opened, {0}", context.PartitionKeyRangeId);
+            logger.LogInformation("Observer opened, {0}", context.PartitionKeyRangeId);
 
             return Task.CompletedTask;
         }
 
         public Task CloseAsync(IChangeFeedObserverContext context, ChangeFeedObserverCloseReason reason)
         {
-            this.logger.LogInformation("Observer closed, {0} - Reason for shutdown {1}",
-                context.PartitionKeyRangeId,
-                reason);
+            logger.LogInformation("Observer closed, {0} - Reason for shutdown {1}", context.PartitionKeyRangeId, reason);
 
             return Task.CompletedTask;
         }
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Should always continue")]
         public async Task ProcessChangesAsync(
             IChangeFeedObserverContext context,
             IReadOnlyList<Document> docs,
             CancellationToken cancellationToken)
         {
-            int batchSizeInBytes = 0;
-            StringBuilder data = new StringBuilder();
-            foreach (Document doc in docs)
+            var batchSizeInBytes = 0;
+            var data = new StringBuilder();
+            foreach (var doc in docs)
             {
                 if (cancellationToken.IsCancellationRequested)
                 {
@@ -64,12 +62,12 @@ namespace Common.ChangeFeed
 
                 try
                 {
-                    int docSize = doc.ToByteArray().Length;
+                    var docSize = doc.ToByteArray().Length;
 
                     if (batchSizeInBytes + docSize > MaxBatchSizeInBytes)
                     {
                         //Flush it
-                        await this.SendCompressedMessageAsync(data.ToString());
+                        await SendCompressedMessageAsync(data.ToString());
 
                         // Reset buffer and batch size
                         data = new StringBuilder();
@@ -79,12 +77,12 @@ namespace Common.ChangeFeed
                     else
                     {
                         data.AppendLine(doc.ToString());
-                        batchSizeInBytes = batchSizeInBytes + doc.ToByteArray().Length;
+                        batchSizeInBytes += doc.ToByteArray().Length;
                     }
                 }
                 catch (Exception e)
                 {
-                    this.logger.LogError(
+                    logger.LogError(
                         "Update failed for partition {0} - docs count: {1} - message : {2} - Complete Exception {3}",
                         context.PartitionKeyRangeId,
                         docs.Count,
@@ -95,25 +93,28 @@ namespace Common.ChangeFeed
 
             if (batchSizeInBytes > 0)
             {
-                await this.SendCompressedMessageAsync(data.ToString());
+                await SendCompressedMessageAsync(data.ToString());
             }
         }
 
         private async Task SendCompressedMessageAsync(string data)
         {
-            byte[] compressed = await DataCompression.GetGZipContentInBytesAsync(data);
+            var compressed = await DataCompression.GetGZipContentInBytesAsync(data);
             // Event hub only takes only , 256byte per size
             // bigger ones please save to azure blob
             if (compressed.Length > MaxCompressedSizeInBytes)
             {
                 // Write to blob
-                new AzureBlobUploader(AzureBlobErrorsContainer).UploadBlob(compressed, System.Guid.NewGuid().ToString() + ".zip",
-                    false);
+                var azureBlobUploader = new AzureBlobUploader(AzureBlobErrorsContainer);
+                await azureBlobUploader.UploadBlobAsync(compressed, $"{Guid.NewGuid()}.zip", false);
             }
             else
             {
                 // Send to event hub
-                await this.eventHubClient.SendAsync(new EventData(compressed));
+                using (var eventData = new EventData(compressed))
+                {
+                    await eventHubClient.SendAsync(eventData);
+                }
             }
         }
     }

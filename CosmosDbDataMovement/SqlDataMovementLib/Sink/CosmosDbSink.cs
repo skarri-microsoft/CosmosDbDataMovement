@@ -1,45 +1,45 @@
-﻿namespace SqlDataMovementLib.Sink
+using System;
+using System.Collections.Generic;
+using System.Configuration;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using Common;
+using Common.SdkExtensions;
+using Common.SinkContracts;
+using CosmosDBInteropSchemaDecoder;
+using Microsoft.Azure.CosmosDB.BulkExecutor;
+using Microsoft.Azure.CosmosDB.BulkExecutor.BulkImport;
+using Microsoft.Azure.Documents;
+using Microsoft.Azure.Documents.ChangeFeedProcessor.FeedProcessing;
+using Microsoft.Azure.Documents.Client;
+using Microsoft.Extensions.Logging;
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
+using MongoDB.Driver;
+using Newtonsoft.Json.Linq;
+
+namespace SqlDataMovementLib.Sink
 {
-    using System;
-    using System.Collections.Generic;
-    using System.Configuration;
-    using System.IO;
-    using System.Linq;
-    using System.Text;
-    using System.Threading;
-    using System.Threading.Tasks;
-    using Common;
-    using Common.SdkExtensions;
-    using Common.SinkContracts;
-    using CosmosDBInteropSchemaDecoder;
-    using Microsoft.Azure.CosmosDB.BulkExecutor;
-    using Microsoft.Azure.CosmosDB.BulkExecutor.BulkImport;
-    using Microsoft.Azure.Documents;
-    using Microsoft.Azure.Documents.ChangeFeedProcessor.FeedProcessing;
-    using Microsoft.Azure.Documents.Client;
-    using Microsoft.Extensions.Logging;
-    using MongoDB.Bson;
-    using MongoDB.Bson.Serialization;
-    using MongoDB.Driver;
-    using Newtonsoft.Json.Linq;
-    using ConnectionMode = Microsoft.Azure.Documents.Client.ConnectionMode;
 
     public class CosmosDbSink : ICosmosDbSink
     {
         private static readonly Random rnd = new Random();
-        private static IBulkExecutor bulkExecutor = null;
-        private static IMongoCollection<BsonDocument> destDocStoreCollection = null;
+        private static IBulkExecutor bulkExecutor;
+        private static IMongoCollection<BsonDocument> destDocStoreCollection;
 
         // Default retries
         private static int insertRetries = 3;
 
-        private List<string> insertFailedDocs = null;
-        private List<string> parseErrors = null;
+        private List<string> insertFailedDocs;
+        private List<string> parseErrors;
 
         // TODO: move to app.config
         private static int minWait = 1500;
         private static int maxWait = 3000;
-        private static long docsCount = 0;
+        private static long docsCount;
 
         // TODO: move to configuration
         private const string ParserFailuresContainer = "parserfailures";
@@ -47,88 +47,84 @@
 
         private static readonly string schema = ConfigurationManager.AppSettings["schema"];
 
-        private static readonly ConnectionPolicy ConnectionPolicy = new ConnectionPolicy
-        {
-            ConnectionMode = ConnectionMode.Direct,
-            ConnectionProtocol = Protocol.Tcp
-        };
-
         private readonly ILogger logger;
 
         public CosmosDbSink(ILoggerFactory loggerFactory)
         {
             if (loggerFactory == null) { throw new ArgumentNullException(nameof(loggerFactory)); }
 
-            this.logger = loggerFactory.CreateLogger<CosmosDbSink>();
+            logger = loggerFactory.CreateLogger<CosmosDbSink>();
         }
 
-        public async void IngestDocs(
+        public async Task IngestDocsAsync(
             SqlClientExtension client,
             IChangeFeedObserverContext context,
             IReadOnlyList<Document> docs,
-            CancellationToken cancellationToken,
-            Uri destinationCollectionUri)
+            Uri destinationCollectionUri,
+            CancellationToken cancellationToken)
         {
-            foreach (Document doc in docs)
+            foreach (var doc in docs)
             {
                 if (cancellationToken.IsCancellationRequested)
-                {
                     return;
-                }
-                JObject objects = JObject.Parse(doc.ToString());
+
+                var objects = JObject.Parse(doc.ToString());
                 objects.Remove("_lsn");
                 objects.Remove("_metadata");
-                string json = objects.ToString();
-                using (MemoryStream ms = new MemoryStream(Encoding.UTF8.GetBytes(json)))
+                var json = objects.ToString();
+                using (var ms = new MemoryStream(Encoding.UTF8.GetBytes(json)))
                 {
-                    await client.DocumentClient.CreateDocumentAsync(destinationCollectionUri,
-                        Document.LoadFrom<Document>(ms));
+                    await client.DocumentClient.CreateDocumentAsync(
+                        destinationCollectionUri,
+                        JsonSerializable.LoadFrom<Document>(ms), 
+                        cancellationToken: cancellationToken);
                 }
             }
         }
 
-        public async void IngestDocsInBulk(
-           SqlClientExtension client,
-           IChangeFeedObserverContext context,
-           IReadOnlyList<Document> docs,
-           CancellationToken cancellationToken,
-           Uri destinationCollectionUri)
+        public async Task IngestDocsInBulkAsync(
+            SqlClientExtension client,
+            IChangeFeedObserverContext context,
+            IReadOnlyList<Document> docs,
+            Uri destinationCollectionUri,
+            CancellationToken cancellationToken)
         {
-            DocumentCollection documentCollection = await client.GetDocumentCollectionAsync();
+            var documentCollection = await client.GetDocumentCollectionAsync();
 
-            InitBulkExecutor(client.DocumentClient, documentCollection);
+            await InitBulkExecutorAsync(client.DocumentClient, documentCollection);
 
-            BulkImportResponse bulkImportResponse = null;
-            var tokenSource = new CancellationTokenSource();
-            var token = tokenSource.Token;
+            using (var tokenSource = new CancellationTokenSource())
+            {
+                CancellationToken token = tokenSource.Token;
 
-            try
-            {
-                bulkImportResponse = await bulkExecutor.BulkImportAsync(
-                    documents: docs,
-                    enableUpsert: true,
-                    disableAutomaticIdGeneration: true,
-                    maxConcurrencyPerPartitionKeyRange: null,
-                    maxInMemorySortingBatchSize: null,
-                    cancellationToken: token);
-            }
-            catch (DocumentClientException de)
-            {
-                this.logger.LogError("Document client exception: {0}", de);
-            }
-            catch (Exception e)
-            {
-                this.logger.LogError("Exception: {0}", e);
+                try
+                {
+                    await bulkExecutor.BulkImportAsync(
+                        docs,
+                        enableUpsert: true,
+                        disableAutomaticIdGeneration: true,
+                        maxConcurrencyPerPartitionKeyRange: null,
+                        maxInMemorySortingBatchSize: null,
+                        token);
+                }
+                catch (DocumentClientException de)
+                {
+                    logger.LogError("Document client exception: {0}", de);
+                }
+                catch (Exception e)
+                {
+                    logger.LogError("Exception: {0}", e);
+                }
             }
         }
 
-        public void IngestDocs(
+        public async Task IngestDocsAsync(
             IMongoCollection<BsonDocument> mongoCollection,
             int documentRetries,
             IChangeFeedObserverContext context,
             IReadOnlyList<Document> docs,
-            CancellationToken cancellationToken,
-            Uri destinationCollectionUri)
+            Uri destinationCollectionUri,
+            CancellationToken cancellationToken)
         {
             if (destDocStoreCollection == null)
             {
@@ -139,21 +135,22 @@
             insertFailedDocs = new List<string>();
             parseErrors = new List<string>();
 
-            InsertAllDocuments(docs).Wait();
+            await InsertAllDocumentsAsync(docs, cancellationToken);
 
             if (parseErrors.Any())
             {
-                UploadDataAsync(parseErrors, ParserFailuresContainer).Wait();
+                await UploadDataAsync(parseErrors, ParserFailuresContainer, cancellationToken);
                 parseErrors = null;
             }
+
             if (insertFailedDocs.Any())
             {
-                UploadDataAsync(insertFailedDocs, FailedDocumentsContainer).Wait();
+                await UploadDataAsync(insertFailedDocs, FailedDocumentsContainer, cancellationToken);
                 insertFailedDocs = null;
             }
         }
 
-        public static async void InitBulkExecutor(
+        public static async Task InitBulkExecutorAsync(
             DocumentClient client,
             DocumentCollection documentCollection)
         {
@@ -170,22 +167,22 @@
             return ex.Message.ToLower().Contains("Request rate is large".ToLower());
         }
 
-        private async Task InsertAllDocuments(IEnumerable<Document> docs)
+        private async Task InsertAllDocumentsAsync(IEnumerable<Document> docs, CancellationToken cancellationToken)
         {
             var tasks = new List<Task>();
-            for (int j = 0; j < docs.Count(); j++)
+            for (var j = 0; j < docs.Count(); j++)
             {
-                tasks.Add(InsertDocument(docs.ToList()[j]));
+                tasks.Add(InsertDocumentAsync(docs.ToList()[j], cancellationToken));
             }
 
-            await Task.WhenAll(tasks).ConfigureAwait(false);
+            await Task.WhenAll(tasks);
             docsCount = docsCount + docs.Count();
-            this.logger.LogInformation("Total documents copied so far: {0}", docsCount);
+            logger.LogInformation("Total documents copied so far: {0}", docsCount);
         }
 
-        private async Task InsertDocument(dynamic doc)
+        private async Task InsertDocumentAsync(dynamic doc, CancellationToken token)
         {
-            bool isSucceed = false;
+            var isSucceed = false;
 
             try
             {
@@ -193,7 +190,7 @@
                 objects.Remove("_lsn");
                 objects.Remove("_metadata");
 
-                BsonDocument bsonDocument = null;
+                BsonDocument bsonDocument;
 
                 // Old schema is plain json, no need to convert it.
                 if (schema.ToLower() == "old")
@@ -205,11 +202,11 @@
                     bsonDocument = CosmosDbSchemaDecoder.GetBsonDocument(objects.ToString(), false);
                 }
 
-                for (int i = 0; i < insertRetries; i++)
+                for (var i = 0; i < insertRetries; i++)
                 {
                     try
                     {
-                        await destDocStoreCollection.InsertOneAsync(bsonDocument);
+                        await destDocStoreCollection.InsertOneAsync(bsonDocument, cancellationToken: token);
 
                         isSucceed = true;
                         //Operation succeed just break the loop
@@ -220,14 +217,12 @@
 
                         if (!IsThrottled(ex))
                         {
-                            this.logger.LogError("ERROR: With collection {0}", ex.ToString());
+                            logger.LogError("ERROR: With collection {0}", ex.ToString());
                             throw;
                         }
-                        else
-                        {
-                            // Thread will wait in between 1.5 secs and 3 secs.
-                            await Task.Delay(rnd.Next(minWait, maxWait));
-                        }
+
+                        // Thread will wait in between 1.5 secs and 3 secs.
+                        await Task.Delay(rnd.Next(minWait, maxWait), token);
                     }
                 }
 
@@ -236,24 +231,29 @@
                     insertFailedDocs.Add(objects.ToString());
                 }
             }
+#pragma warning disable 168
             catch (Exception e)
+#pragma warning restore 168
             {
                 // Parse Error
                 parseErrors.Add(doc.ToString());
             }
         }
-        private async Task UploadDataAsync(List<String> dataItems, string containerName)
+
+        private async Task UploadDataAsync(IEnumerable<string> dataItems, string containerName, CancellationToken token)
         {
-            StringBuilder sr = new StringBuilder();
+            var sr = new StringBuilder();
 
             foreach (var item in dataItems)
             {
                 sr.AppendLine(item);
             }
 
-            await new AzureBlobUploader(containerName).UploadTextAsync(
+            var azureBlobUploader = new AzureBlobUploader(containerName);
+            await azureBlobUploader.UploadTextAsync(
                 sr.ToString(),
-                Guid.NewGuid().ToString() + ".json");
+                $"{Guid.NewGuid()}.json", 
+                token);
         }
     }
 }
